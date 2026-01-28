@@ -92,22 +92,18 @@ databricks auth login --host https://your-workspace.cloud.databricks.com --profi
 cd exemplars/ml-model-serving
 
 # Deploy with required variables
-databricks bundle deploy \
-  --var="catalog=my_catalog,schema=ml_serving,model_name=fare_predictor"
+databricks bundle deploy --var="catalog=my_catalog,schema=ml_serving"
 ```
 
 Or with a specific profile:
 ```bash
-databricks bundle deploy \
-  --profile my-profile \
-  --var="catalog=my_catalog,schema=ml_serving,model_name=fare_predictor"
+databricks bundle deploy --profile my-profile --var="catalog=my_catalog,schema=ml_serving"
 ```
 
 ### 3. Run the Training Pipeline
 
 ```bash
-databricks bundle run ml_training_pipeline \
-  --var="catalog=my_catalog,schema=ml_serving,model_name=fare_predictor"
+databricks bundle run ml_training_pipeline --var="catalog=my_catalog,schema=ml_serving"
 ```
 
 ### 4. Test the Endpoint
@@ -136,24 +132,22 @@ curl -X POST "https://<workspace>/serving-endpoints/<endpoint>/invocations" \
 
 ## Configuration
 
-### Required Variables
+### Variables
 
-All variables must be provided via `--var` flag:
-
-| Variable | Description | Example |
+| Variable | Description | Default |
 |----------|-------------|---------|
-| `catalog` | Unity Catalog name | `my_catalog` |
-| `schema` | Schema for tables and models | `ml_serving` |
-| `model_name` | Registered model name | `fare_predictor` |
+| `catalog` | Unity Catalog name | (required) |
+| `schema` | Schema for tables and models | (required) |
+| `model_name` | Registered model name | `fare_predictor_model` |
 
 ### Passing Variables
 
 ```bash
-# Single command
---var="catalog=my_catalog,schema=ml_serving,model_name=fare_predictor"
+# Required variables only (model_name uses default)
+--var="catalog=my_catalog,schema=ml_serving"
 
-# Or multiple flags
---var="catalog=my_catalog" --var="schema=ml_serving" --var="model_name=fare_predictor"
+# Override all variables
+--var="catalog=my_catalog,schema=ml_serving,model_name=my_model"
 ```
 
 ## Pipeline Details

@@ -7,7 +7,8 @@ variables:
   schema:
     description: Schema for ML tables and models (required)
   model_name:
-    description: Name for the registered model in Unity Catalog (required)
+    description: Name for the registered model in Unity Catalog
+    default: fare_predictor_model
 
 include:
   - resources/*.yml

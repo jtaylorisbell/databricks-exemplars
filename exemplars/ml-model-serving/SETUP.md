@@ -61,8 +61,7 @@ cd databricks-exemplars/exemplars/ml-model-serving
 ### 2. Validate the Bundle
 
 ```bash
-databricks bundle validate \
-  --var="catalog=your_catalog,schema=ml_serving,model_name=fare_predictor"
+databricks bundle validate --var="catalog=your_catalog,schema=ml_serving"
 ```
 
 Expected output shows the resources that will be created.
@@ -70,15 +69,13 @@ Expected output shows the resources that will be created.
 ### 3. Deploy
 
 ```bash
-databricks bundle deploy \
-  --var="catalog=your_catalog,schema=ml_serving,model_name=fare_predictor"
+databricks bundle deploy --var="catalog=your_catalog,schema=ml_serving"
 ```
 
 ### 4. Run Training Pipeline
 
 ```bash
-databricks bundle run ml_training_pipeline \
-  --var="catalog=your_catalog,schema=ml_serving,model_name=fare_predictor"
+databricks bundle run ml_training_pipeline --var="catalog=your_catalog,schema=ml_serving"
 ```
 
 Monitor progress in the Databricks UI under **Workflows > Jobs**.
@@ -103,8 +100,7 @@ databricks tables list --catalog-name your_catalog --schema-name ml_serving
 To remove all deployed resources:
 
 ```bash
-databricks bundle destroy \
-  --var="catalog=your_catalog,schema=ml_serving,model_name=fare_predictor"
+databricks bundle destroy --var="catalog=your_catalog,schema=ml_serving"
 ```
 
 Note: This removes jobs but not:
