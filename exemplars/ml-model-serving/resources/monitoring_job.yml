@@ -1,16 +1,16 @@
 resources:
   jobs:
-    ml_batch_inference:
-      name: ml-batch-inference
-      description: Scheduled batch scoring using the Champion model
+    ml_monitoring:
+      name: ml-monitoring
+      description: Monitor model drift and accuracy degradation
       schedule:
-        quartz_cron_expression: "0 0 */6 * * ?"
+        quartz_cron_expression: "0 0 8 * * ?"
         timezone_id: UTC
         pause_status: PAUSED
       tasks:
-        - task_key: batch_predict
+        - task_key: monitor_drift
           notebook_task:
-            notebook_path: ../src/batch_inference.py
+            notebook_path: ../src/monitoring.py
             base_parameters:
               catalog: ${var.catalog}
               schema: ${var.schema}
@@ -23,6 +23,5 @@ resources:
             client: "1"
             dependencies:
               - mlflow>=2.10.0
-              - scikit-learn>=1.3.0
               - pandas>=2.0.0
               - numpy>=1.24.0

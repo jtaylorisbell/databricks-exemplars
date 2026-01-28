@@ -1,10 +1,14 @@
 # Databricks notebook source
 # MAGIC %md
 # MAGIC # Batch Inference
-# MAGIC Score new data using the registered model.
+# MAGIC
+# MAGIC Score new data using the Champion model and write predictions to a table.
+
+# COMMAND ----------
 
 import mlflow
 from pyspark.sql import functions as F
+from datetime import datetime
 
 # COMMAND ----------
 
@@ -13,68 +17,124 @@ catalog = dbutils.widgets.get("catalog")
 schema = dbutils.widgets.get("schema")
 model_name = dbutils.widgets.get("model_name")
 
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Load Model from Unity Catalog
-
-# Full model path
 uc_model_name = f"{catalog}.{schema}.{model_name}"
-
-# Load model using alias (champion) or specific version
-model_uri = f"models:/{uc_model_name}@champion"
-model = mlflow.pyfunc.load_model(model_uri)
-
-print(f"Loaded model: {model_uri}")
+feature_table = f"{catalog}.{schema}.feature_table"
+predictions_table = f"{catalog}.{schema}.predictions"
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Load Data to Score
+# MAGIC ## Load Champion Model
 
-# Load feature data (customize based on your source)
-scoring_data = spark.table(f"{catalog}.{schema}.feature_table")
+# COMMAND ----------
+
+mlflow.set_tracking_uri("databricks")
+mlflow.set_registry_uri("databricks-uc")
+
+# Load the Champion model using alias
+model_uri = f"models:/{uc_model_name}@Champion"
+print(f"Loading model: {model_uri}")
+
+model = mlflow.sklearn.load_model(model_uri)
+print("Champion model loaded successfully!")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Load Features for Scoring
+
+# COMMAND ----------
+
+# Load feature data
+features_df = spark.table(feature_table)
+print(f"Records to score: {features_df.count()}")
 
 # Convert to pandas for sklearn model
-scoring_pdf = scoring_data.toPandas()
+features_pdf = features_df.toPandas()
 
-# Define feature columns (must match training)
 feature_columns = [
-    "feature_ratio",
-    "feature_log",
-    "feature_binned_encoded",
-    "feature_date_dayofweek",
-    "feature_date_month",
+    "trip_distance",
+    "pickup_hour",
+    "pickup_dayofweek",
+    "pickup_month",
+    "is_weekend",
+    "is_rush_hour"
 ]
+
+X = features_pdf[feature_columns]
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ## Generate Predictions
 
-# Score
-predictions = model.predict(scoring_pdf[feature_columns])
+# COMMAND ----------
 
-# Add predictions to dataframe
-scoring_pdf["prediction"] = predictions
-scoring_pdf["scored_at"] = F.current_timestamp()
+# Score data
+predictions = model.predict(X)
+features_pdf["predicted_fare"] = predictions
+features_pdf["prediction_timestamp"] = datetime.now()
+features_pdf["model_version"] = model_uri
 
-# Convert back to Spark
-predictions_df = spark.createDataFrame(scoring_pdf)
+# Convert back to Spark DataFrame
+predictions_df = spark.createDataFrame(features_pdf)
+
+print(f"Generated {len(predictions)} predictions")
+print(f"Prediction stats:")
+print(f"  Mean: ${predictions.mean():.2f}")
+print(f"  Min: ${predictions.min():.2f}")
+print(f"  Max: ${predictions.max():.2f}")
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ## Write Predictions
 
-# Append predictions with timestamp
+# COMMAND ----------
+
+# Append predictions to table (creates if not exists)
 (
     predictions_df
-    .withColumn("scored_at", F.current_timestamp())
+    .select(
+        "trip_distance",
+        "pickup_hour",
+        "pickup_dayofweek",
+        "pickup_month",
+        "is_weekend",
+        "is_rush_hour",
+        "fare_amount",
+        "predicted_fare",
+        "prediction_timestamp",
+        "model_version"
+    )
     .write
     .mode("append")
-    .saveAsTable(f"{catalog}.{schema}.predictions")
+    .option("mergeSchema", "true")
+    .saveAsTable(predictions_table)
 )
 
-print(f"Predictions written to {catalog}.{schema}.predictions")
-print(f"Rows scored: {predictions_df.count()}")
+print(f"Predictions written to: {predictions_table}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Log Inference Metrics
+
+# COMMAND ----------
+
+# Calculate prediction error for logged predictions (where actual is available)
+error_stats = (
+    predictions_df
+    .withColumn("prediction_error", F.abs(F.col("predicted_fare") - F.col("fare_amount")))
+    .select(
+        F.mean("prediction_error").alias("mae"),
+        F.stddev("prediction_error").alias("error_stddev"),
+        F.count("*").alias("record_count")
+    )
+    .first()
+)
+
+print(f"\nInference batch metrics:")
+print(f"  Records scored: {error_stats.record_count}")
+print(f"  MAE vs actual: ${error_stats.mae:.2f}")
+print(f"  Error stddev: ${error_stats.error_stddev:.2f}")

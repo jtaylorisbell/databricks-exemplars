@@ -1,4 +1,4 @@
-"""Unit tests for feature engineering logic.
+"""Unit tests for fare prediction feature engineering.
 
 Run with: uv run pytest tests/
 """
@@ -6,85 +6,138 @@ Run with: uv run pytest tests/
 import pytest
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import LabelEncoder
+from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.metrics import mean_absolute_error
 
 
 class TestFeatureTransformations:
     """Tests for feature transformation functions."""
 
-    def test_ratio_calculation(self):
-        """Feature ratio should be calculated correctly."""
-        df = pd.DataFrame({
-            "value_a": [10, 20, 30],
-            "value_b": [2, 4, 5],
-        })
+    def test_weekend_flag(self):
+        """Weekend flag should be 1 for Saturday (7) and Sunday (1)."""
+        dayofweek_values = [1, 2, 3, 4, 5, 6, 7]  # Sun=1, Sat=7
+        expected = [1, 0, 0, 0, 0, 0, 1]
 
-        df["feature_ratio"] = df["value_a"] / df["value_b"]
+        results = [1 if d in [1, 7] else 0 for d in dayofweek_values]
 
-        assert df["feature_ratio"].tolist() == [5.0, 5.0, 6.0]
+        assert results == expected
 
-    def test_log_transform(self):
-        """Log transform should handle zeros correctly."""
-        df = pd.DataFrame({"amount": [0, 1, 100]})
+    def test_rush_hour_flag(self):
+        """Rush hour should be flagged for 7-9 AM and 4-7 PM."""
+        hours = [6, 7, 8, 9, 10, 15, 16, 17, 18, 19, 20]
+        expected = [0, 1, 1, 1, 0, 0, 1, 1, 1, 1, 0]
 
-        # log1p handles zeros
-        df["feature_log"] = np.log1p(df["amount"])
+        def is_rush_hour(h):
+            return 1 if (7 <= h <= 9) or (16 <= h <= 19) else 0
 
-        assert df["feature_log"][0] == 0.0  # log1p(0) = 0
-        assert df["feature_log"][1] == pytest.approx(0.693, rel=0.01)
+        results = [is_rush_hour(h) for h in hours]
 
-    def test_binning_logic(self):
-        """Binning should categorize correctly."""
-        amounts = [50, 500, 5000]
+        assert results == expected
 
-        def bin_amount(x):
-            if x < 100:
-                return "low"
-            elif x < 1000:
-                return "medium"
-            else:
-                return "high"
+    def test_fare_outlier_filtering(self):
+        """Fares outside valid range should be filtered."""
+        fares = [5.0, 50.0, 150.0, 250.0, -5.0, 0.0]
 
-        results = [bin_amount(a) for a in amounts]
+        # Valid fares: > 0 and < 200
+        valid_fares = [f for f in fares if 0 < f < 200]
 
-        assert results == ["low", "medium", "high"]
-
-    def test_label_encoding(self):
-        """Categorical encoding should be consistent."""
-        categories = ["low", "medium", "high", "low", "medium"]
-
-        le = LabelEncoder()
-        encoded = le.fit_transform(categories)
-
-        # Same categories should have same encoding
-        assert encoded[0] == encoded[3]  # both "low"
-        assert encoded[1] == encoded[4]  # both "medium"
+        assert valid_fares == [5.0, 50.0, 150.0]
 
 
 class TestFeatureValidation:
     """Tests for feature data validation."""
 
+    def test_feature_dtypes(self):
+        """Features should have expected numeric types."""
+        df = pd.DataFrame({
+            "trip_distance": [1.5, 2.0, 3.5],
+            "pickup_hour": [8, 12, 18],
+            "pickup_dayofweek": [1, 3, 5],
+            "pickup_month": [1, 6, 12],
+            "is_weekend": [0, 0, 1],
+            "is_rush_hour": [1, 0, 1],
+        })
+
+        assert df["trip_distance"].dtype == np.float64
+        assert df["pickup_hour"].dtype == np.int64
+        assert df["is_weekend"].dtype == np.int64
+
     def test_no_null_features(self):
         """Features should not contain nulls after transformation."""
         df = pd.DataFrame({
-            "value_a": [10, 20, None],
-            "value_b": [2, 4, 5],
+            "trip_distance": [1.5, 2.0, None],
+            "pickup_hour": [8, 12, 18],
         })
 
-        # This would fail if nulls propagate
         df_clean = df.dropna()
-        df_clean["feature_ratio"] = df_clean["value_a"] / df_clean["value_b"]
 
-        assert df_clean["feature_ratio"].isna().sum() == 0
+        assert df_clean["trip_distance"].isna().sum() == 0
+        assert len(df_clean) == 2
 
-    def test_feature_dtypes(self):
-        """Features should have expected data types."""
-        df = pd.DataFrame({
-            "feature_ratio": [1.5, 2.0, 3.5],
-            "feature_log": [0.0, 0.5, 1.0],
-            "feature_binned": ["low", "medium", "high"],
+
+class TestModelPredictions:
+    """Tests for model prediction logic."""
+
+    def test_model_trains_without_error(self):
+        """Model should train without errors on sample data."""
+        X = pd.DataFrame({
+            "trip_distance": [1.0, 2.0, 5.0, 10.0, 15.0],
+            "pickup_hour": [8, 12, 17, 22, 6],
+            "pickup_dayofweek": [2, 3, 4, 5, 7],
+            "pickup_month": [1, 3, 6, 9, 12],
+            "is_weekend": [0, 0, 0, 0, 1],
+            "is_rush_hour": [1, 0, 1, 0, 0],
+        })
+        y = [10.0, 15.0, 25.0, 40.0, 55.0]
+
+        model = GradientBoostingRegressor(n_estimators=10, random_state=42)
+        model.fit(X, y)
+
+        predictions = model.predict(X)
+        assert len(predictions) == len(y)
+
+    def test_predictions_are_positive(self):
+        """Fare predictions should always be positive."""
+        X = pd.DataFrame({
+            "trip_distance": [1.0, 5.0, 10.0],
+            "pickup_hour": [8, 12, 17],
+            "pickup_dayofweek": [2, 3, 4],
+            "pickup_month": [1, 6, 12],
+            "is_weekend": [0, 0, 0],
+            "is_rush_hour": [1, 0, 1],
+        })
+        y = [10.0, 25.0, 45.0]
+
+        model = GradientBoostingRegressor(n_estimators=10, random_state=42)
+        model.fit(X, y)
+
+        predictions = model.predict(X)
+        assert all(p > 0 for p in predictions)
+
+    def test_longer_trips_cost_more(self):
+        """Longer trips should generally have higher predicted fares."""
+        X_train = pd.DataFrame({
+            "trip_distance": [1.0, 5.0, 10.0, 15.0, 20.0],
+            "pickup_hour": [12, 12, 12, 12, 12],
+            "pickup_dayofweek": [3, 3, 3, 3, 3],
+            "pickup_month": [6, 6, 6, 6, 6],
+            "is_weekend": [0, 0, 0, 0, 0],
+            "is_rush_hour": [0, 0, 0, 0, 0],
+        })
+        y_train = [8.0, 18.0, 32.0, 48.0, 65.0]
+
+        model = GradientBoostingRegressor(n_estimators=50, random_state=42)
+        model.fit(X_train, y_train)
+
+        # Predict for short and long trips
+        X_test = pd.DataFrame({
+            "trip_distance": [2.0, 12.0],
+            "pickup_hour": [12, 12],
+            "pickup_dayofweek": [3, 3],
+            "pickup_month": [6, 6],
+            "is_weekend": [0, 0],
+            "is_rush_hour": [0, 0],
         })
 
-        assert df["feature_ratio"].dtype == np.float64
-        assert df["feature_log"].dtype == np.float64
-        assert df["feature_binned"].dtype == object  # string
+        predictions = model.predict(X_test)
+        assert predictions[1] > predictions[0]  # Longer trip costs more

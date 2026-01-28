@@ -1,7 +1,7 @@
 [project]
 name = "ml-model-serving"
 version = "0.1.0"
-description = "End-to-end ML with model serving"
+description = "End-to-end ML with model serving - fare prediction exemplar"
 requires-python = ">=3.10"
 dependencies = []
 

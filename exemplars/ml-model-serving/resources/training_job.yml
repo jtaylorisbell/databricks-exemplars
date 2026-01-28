@@ -1,43 +1,49 @@
 resources:
   jobs:
-    train_model:
-      name: ml-model-training
-      description: Train and register ML model with MLflow
+    ml_training_pipeline:
+      name: ml-training-pipeline
+      description: |
+        Train, validate, and deploy ML model.
+        Runs train → validate → deploy as a multi-task job.
       tasks:
-        - task_key: feature_engineering
-          notebook_task:
-            notebook_path: ../src/feature_engineering.py
-            base_parameters:
-              catalog: ${var.catalog}
-              schema: ${var.schema}
-          job_cluster_key: ml_cluster
-
         - task_key: train
-          depends_on:
-            - task_key: feature_engineering
           notebook_task:
             notebook_path: ../src/train.py
             base_parameters:
               catalog: ${var.catalog}
               schema: ${var.schema}
               model_name: ${var.model_name}
-              experiment_name: ${var.experiment_name}
-          job_cluster_key: ml_cluster
+          environment_key: ml_env
 
-        - task_key: register_model
+        - task_key: validate
           depends_on:
             - task_key: train
           notebook_task:
-            notebook_path: ../src/register_model.py
+            notebook_path: ../src/validate.py
             base_parameters:
               catalog: ${var.catalog}
               schema: ${var.schema}
               model_name: ${var.model_name}
-          job_cluster_key: ml_cluster
+          environment_key: ml_env
 
-      job_clusters:
-        - job_cluster_key: ml_cluster
-          new_cluster:
-            spark_version: 14.3.x-cpu-ml-scala2.12
-            num_workers: 2
-            node_type_id: ${CLOUD_NODE_TYPE}
+        - task_key: deploy
+          depends_on:
+            - task_key: validate
+          notebook_task:
+            notebook_path: ../src/deploy.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+              model_name: ${var.model_name}
+          environment_key: ml_env
+
+      environments:
+        - environment_key: ml_env
+          spec:
+            client: "1"
+            dependencies:
+              - mlflow>=2.10.0
+              - scikit-learn>=1.3.0
+              - pandas>=2.0.0
+              - numpy>=1.24.0
+              - databricks-sdk>=0.20.0

@@ -1,164 +1,189 @@
-# Setup: Using This Exemplar as a Template
+# Setup Guide
 
-Follow these steps to use this exemplar as a starting point for your ML project.
+Detailed setup instructions for the ML Model Serving exemplar.
 
-## 1. Copy the Exemplar
+## Prerequisites
+
+### Workspace Requirements
+
+1. **Unity Catalog** — Must be enabled on your workspace
+2. **Model Serving** — Must be enabled (check workspace settings)
+3. **Serverless Compute** — Must be available in your region
+
+### Permissions Required
+
+- `CREATE CATALOG` or access to an existing catalog
+- `CREATE SCHEMA` in your target catalog
+- `CREATE MODEL` permission
+- `CREATE SERVING ENDPOINT` permission
+- Access to `samples.nyctaxi.trips` dataset
+
+## Authentication Options
+
+### Option A: Default Profile (Recommended)
 
 ```bash
-# Copy to your new project location
+# Login and set as default
+databricks auth login --host https://your-workspace.cloud.databricks.com
+
+# Verify authentication
+databricks current-user me
+```
+
+### Option B: Named Profile
+
+```bash
+# Create a named profile
+databricks auth login --host https://your-workspace.cloud.databricks.com --profile my-workspace
+
+# Use with bundle commands
+databricks bundle deploy --profile my-workspace --var="..."
+```
+
+### Option C: Environment Variable
+
+```bash
+export DATABRICKS_HOST=https://your-workspace.cloud.databricks.com
+
+# Authentication will use OAuth browser flow
+databricks bundle deploy --var="..."
+```
+
+## Step-by-Step Deployment
+
+### 1. Clone and Navigate
+
+```bash
+git clone <repository-url>
+cd databricks-exemplars/exemplars/ml-model-serving
+```
+
+### 2. Validate the Bundle
+
+```bash
+databricks bundle validate \
+  --var="catalog=your_catalog,schema=ml_serving,model_name=fare_predictor"
+```
+
+Expected output shows the resources that will be created.
+
+### 3. Deploy
+
+```bash
+databricks bundle deploy \
+  --var="catalog=your_catalog,schema=ml_serving,model_name=fare_predictor"
+```
+
+### 4. Run Training Pipeline
+
+```bash
+databricks bundle run ml_training_pipeline \
+  --var="catalog=your_catalog,schema=ml_serving,model_name=fare_predictor"
+```
+
+Monitor progress in the Databricks UI under **Workflows > Jobs**.
+
+### 5. Verify Resources
+
+After training completes:
+
+```bash
+# Check model in Unity Catalog
+databricks unity-catalog models list --catalog-name your_catalog --schema-name ml_serving
+
+# Check serving endpoint
+databricks serving-endpoints list
+
+# Check tables
+databricks tables list --catalog-name your_catalog --schema-name ml_serving
+```
+
+## Cleanup
+
+To remove all deployed resources:
+
+```bash
+databricks bundle destroy \
+  --var="catalog=your_catalog,schema=ml_serving,model_name=fare_predictor"
+```
+
+Note: This removes jobs but not:
+- The serving endpoint (manually delete via UI or CLI)
+- Tables and data (manually drop if needed)
+- Registered models (manually delete via UI or CLI)
+
+### Manual Cleanup
+
+```bash
+# Delete serving endpoint
+databricks serving-endpoints delete ml_serving_fare_predictor_endpoint
+
+# Delete model
+databricks unity-catalog models delete your_catalog.ml_serving.fare_predictor
+
+# Drop tables (in SQL)
+# DROP TABLE your_catalog.ml_serving.feature_table;
+# DROP TABLE your_catalog.ml_serving.training_baseline;
+# DROP TABLE your_catalog.ml_serving.predictions;
+# DROP TABLE your_catalog.ml_serving.model_monitoring;
+```
+
+## Using as a Template
+
+### 1. Copy the Exemplar
+
+```bash
 cp -r exemplars/ml-model-serving ~/projects/my-ml-project
 cd ~/projects/my-ml-project
-
-# Initialize git (optional but recommended)
 git init
 ```
 
-Or use the bootstrap script:
+### 2. Customize for Your Use Case
 
-```bash
-./shared/scripts/init-from-exemplar.sh ml-model-serving my-ml-project
-```
-
-## 2. Required Customizations
-
-### Update `databricks.yml`
-
-Open `databricks.yml` and update:
-
+**Update `databricks.yml`:**
 ```yaml
 bundle:
-  name: my-ml-project  # Change from ml-model-serving
-
-variables:
-  catalog:
-    default: your_catalog
-  schema:
-    default: your_schema
-  model_name:
-    default: your_model_name
-  endpoint_name:
-    default: your_model_endpoint
+  name: my-ml-project  # Change bundle name
 ```
 
-### Prepare Training Data
+**Modify `src/train.py`:**
+- Change the data source from `samples.nyctaxi.trips`
+- Update feature engineering for your domain
+- Adjust model algorithm and hyperparameters
 
-Ensure your training data exists in Unity Catalog:
+**Update feature columns** in all src files to match your schema.
 
-```sql
--- Your feature table should exist
-SELECT * FROM your_catalog.your_schema.training_data LIMIT 10;
-```
-
-## 3. Customize the Model
-
-### Feature Engineering
-
-Edit `src/feature_engineering.py` to define your features:
-
-```python
-# Define your feature transformations
-features = (
-    raw_data
-    .withColumn("feature1", ...)
-    .withColumn("feature2", ...)
-)
-```
-
-### Model Training
-
-Edit `src/train.py` to customize:
-
-- Model algorithm (sklearn, XGBoost, PyTorch, etc.)
-- Hyperparameter search space
-- Evaluation metrics
-- Training data preprocessing
-
-### Inference Logic
-
-Edit `src/inference.py` for:
-
-- Input preprocessing
-- Output postprocessing
-- Custom scoring logic
-
-## 4. Deploy
+### 3. Deploy Your Version
 
 ```bash
-# Validate your configuration
-databricks bundle validate
-
-# Deploy resources
-databricks bundle deploy
-
-# Run training
-databricks bundle run train_model
-```
-
-## 5. Create Serving Endpoint
-
-After training completes and the model is registered:
-
-```bash
-# Deploy the serving endpoint
-databricks bundle run deploy_endpoint
-
-# Or create manually via CLI
-databricks serving-endpoints create --json '{
-  "name": "your_model_endpoint",
-  "config": {
-    "served_models": [{
-      "model_name": "your_catalog.your_schema.your_model_name",
-      "model_version": "1",
-      "workload_size": "Small",
-      "scale_to_zero_enabled": true
-    }]
-  }
-}'
-```
-
-## 6. Test the Endpoint
-
-```bash
-# Get endpoint status
-databricks serving-endpoints get your_model_endpoint
-
-# Test inference
-curl -X POST "https://<workspace>/serving-endpoints/your_model_endpoint/invocations" \
-  -H "Authorization: Bearer $(databricks auth token)" \
-  -H "Content-Type: application/json" \
-  -d '{"instances": [{"feature1": 1.0, "feature2": 2.0}]}'
-```
-
-## 7. Set Up Batch Inference (Optional)
-
-The `batch_inference` job scores data on a schedule:
-
-```bash
-# Run batch inference manually
-databricks bundle run batch_inference
-
-# Or let it run on schedule (configured in resources/batch_job.yml)
+databricks bundle deploy \
+  --var="catalog=my_catalog,schema=my_schema,model_name=my_model"
 ```
 
 ## Troubleshooting
 
-### Model not registering
+### "Catalog not found"
 
-Check that:
-1. MLflow experiment is accessible
-2. You have MANAGE permissions on the model
-3. Unity Catalog model registry is enabled
-
-### Endpoint not starting
-
-Verify:
-1. Model artifact is valid
-2. You have endpoint creation permissions
-3. Workspace has Model Serving enabled
-
-### Inference errors
-
-Check endpoint logs:
+Ensure you have access to the catalog:
 ```bash
-databricks serving-endpoints logs your_model_endpoint
+databricks unity-catalog catalogs list
 ```
+
+### "Model Serving not enabled"
+
+Contact your workspace admin to enable Model Serving in workspace settings.
+
+### "Serverless compute not available"
+
+Serverless may not be available in all regions. Check [Databricks documentation](https://docs.databricks.com/en/compute/serverless.html) for supported regions.
+
+### "Permission denied creating endpoint"
+
+Request `CAN_CREATE_SERVING_ENDPOINTS` permission from your workspace admin.
+
+### "Cold start timeout during validation"
+
+The validate task includes retry logic for model loading. If timeouts persist:
+1. Check model artifact size
+2. Verify model dependencies are available
+3. Review endpoint logs for errors
