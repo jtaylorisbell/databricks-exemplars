@@ -1,0 +1,26 @@
+resources:
+  jobs:
+    streaming_ingest:
+      name: streaming-ingest
+      description: Continuous streaming ingestion job
+      tasks:
+        - task_key: ingest_and_process
+          notebook_task:
+            notebook_path: ../src/stream_ingest.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+              source_path: ${var.source_path}
+              checkpoint_path: ${var.checkpoint_path}
+          job_cluster_key: streaming_cluster
+      job_clusters:
+        - job_cluster_key: streaming_cluster
+          new_cluster:
+            spark_version: 14.3.x-scala2.12
+            num_workers: 2
+            node_type_id: ${CLOUD_NODE_TYPE}
+            spark_conf:
+              spark.databricks.delta.preview.enabled: "true"
+      max_concurrent_runs: 1
+      continuous:
+        pause_status: UNPAUSED

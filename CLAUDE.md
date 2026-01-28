@@ -20,6 +20,9 @@ The documentation also includes migration guides, best practices, troubleshootin
 - **ALWAYS use OAuth for Databricks authentication** - Never use Personal Access Tokens (PATs)
 - Use service principals with OAuth for automated workloads
 
+## Databricks Asset Bundles
+- **ALWAYS prefer serverless compute** - When creating pipelines, jobs, or other resources, use serverless configurations instead of classic clusters
+
 ## Code Style
 
 ### Python

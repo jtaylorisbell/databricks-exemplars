@@ -1,0 +1,37 @@
+bundle:
+  name: ml-model-serving
+
+variables:
+  catalog:
+    description: Unity Catalog name
+    default: main
+  schema:
+    description: Schema for ML tables and models
+    default: ml_serving
+  model_name:
+    description: Name for the registered model
+    default: my_model
+  endpoint_name:
+    description: Name for the serving endpoint
+    default: my_model_endpoint
+  experiment_name:
+    description: MLflow experiment name
+    default: /Shared/ml-model-serving
+
+include:
+  - resources/*.yml
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: ${DATABRICKS_HOST}
+
+  prod:
+    mode: production
+    workspace:
+      host: ${DATABRICKS_HOST}
+    variables:
+      schema: ml_serving_prod
+      endpoint_name: my_model_endpoint_prod

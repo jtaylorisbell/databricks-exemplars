@@ -1,0 +1,21 @@
+bundle:
+  name: batch-etl-pipeline
+
+variables:
+  catalog:
+    description: Unity Catalog name for output tables (required)
+  schema:
+    description: Schema name for pipeline tables (required)
+
+include:
+  - resources/*.yml
+
+targets:
+  dev:
+    mode: development
+    default: true
+    # Host comes from CLI profile or DATABRICKS_HOST env var
+
+  prod:
+    mode: production
+    # Host comes from CLI profile or DATABRICKS_HOST env var

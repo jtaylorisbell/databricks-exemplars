@@ -1,0 +1,23 @@
+resources:
+  jobs:
+    batch_inference:
+      name: ml-batch-inference
+      description: Scheduled batch scoring job
+      schedule:
+        quartz_cron_expression: "0 0 */6 * * ?"
+        timezone_id: UTC
+      tasks:
+        - task_key: score
+          notebook_task:
+            notebook_path: ../src/batch_inference.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+              model_name: ${var.model_name}
+          job_cluster_key: inference_cluster
+      job_clusters:
+        - job_cluster_key: inference_cluster
+          new_cluster:
+            spark_version: 14.3.x-cpu-ml-scala2.12
+            num_workers: 1
+            node_type_id: ${CLOUD_NODE_TYPE}

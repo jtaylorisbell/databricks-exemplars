@@ -1,0 +1,34 @@
+resources:
+  jobs:
+    batch_etl_refresh:
+      name: batch-etl-refresh-${bundle.target}
+      description: |
+        Refreshes the batch ETL pipeline to process latest data from samples.bakehouse.
+
+        This job triggers a full refresh of all materialized views in the pipeline,
+        updating bronze, silver, and gold layers with current source data.
+
+      # Schedule: Run daily at 6 AM UTC (disabled by default for exemplar)
+      # Uncomment to enable scheduled runs
+      # schedule:
+      #   quartz_cron_expression: "0 0 6 * * ?"
+      #   timezone_id: UTC
+
+      tasks:
+        - task_key: refresh_pipeline
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.batch_etl_pipeline.id}
+            full_refresh: false  # Set to true for complete recomputation
+
+      # Job-level settings
+      queue:
+        enabled: true
+
+      # Email notifications (configure as needed)
+      # email_notifications:
+      #   on_failure:
+      #     - your-team@example.com
+
+      tags:
+        exemplar: batch-etl-pipeline
+        layer: orchestration

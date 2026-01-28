@@ -1,0 +1,14 @@
+resources:
+  pipelines:
+    batch_etl_pipeline:
+      name: batch-etl-pipeline-${bundle.target}
+      catalog: ${var.catalog}
+      target: ${var.schema}
+      development: true
+      continuous: false
+      channel: PREVIEW
+      photon: true
+      serverless: true
+      libraries:
+        - file:
+            path: ../src/pipeline.py
