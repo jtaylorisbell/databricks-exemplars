@@ -12,13 +12,14 @@
 
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.serving import (
+    AiGatewayConfig,
+    AiGatewayInferenceTableConfig,
     EndpointCoreConfigInput,
     ServedEntityInput,
     TrafficConfig,
     Route,
 )
 from mlflow.tracking import MlflowClient
-import time
 
 # COMMAND ----------
 
@@ -90,14 +91,24 @@ served_entity = ServedEntityInput(
 )
 
 endpoint_config = EndpointCoreConfigInput(
+    name=endpoint_name,
     served_entities=[served_entity],
     traffic_config=TrafficConfig(
         routes=[
             Route(
-                served_model_name=f"{uc_model_name}-{model_version}",
+                served_model_name=f"{model_name}-{model_version}",
                 traffic_percentage=100
             )
         ]
+    )
+)
+
+# AI Gateway config — enables automatic request/response logging to an inference table
+ai_gateway_config = AiGatewayConfig(
+    inference_table_config=AiGatewayInferenceTableConfig(
+        catalog_name=catalog,
+        schema_name=schema,
+        enabled=True,
     )
 )
 
@@ -123,18 +134,28 @@ if endpoint_exists:
         traffic_config=TrafficConfig(
             routes=[
                 Route(
-                    served_model_name=f"{uc_model_name}-{model_version}",
+                    served_model_name=f"{model_name}-{model_version}",
                     traffic_percentage=100
                 )
             ]
         )
     )
+    # Enable inference table logging (update_config_and_wait doesn't accept ai_gateway)
+    w.serving_endpoints.put_ai_gateway(
+        name=endpoint_name,
+        inference_table_config=AiGatewayInferenceTableConfig(
+            catalog_name=catalog,
+            schema_name=schema,
+            enabled=True,
+        ),
+    )
 else:
-    # Create new endpoint
+    # Create new endpoint with inference table logging enabled
     print(f"Creating new endpoint '{endpoint_name}'...")
     w.serving_endpoints.create_and_wait(
         name=endpoint_name,
-        config=endpoint_config
+        config=endpoint_config,
+        ai_gateway=ai_gateway_config,
     )
 
 print(f"Endpoint ready: {endpoint_name}")

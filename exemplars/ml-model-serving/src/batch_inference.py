@@ -2,12 +2,14 @@
 # MAGIC %md
 # MAGIC # Batch Inference
 # MAGIC
-# MAGIC Score new data using the Champion model and write predictions to a table.
+# MAGIC Score new data using `ai_query()` against the deployed serving endpoint.
+# MAGIC This avoids loading the model onto the driver and instead routes predictions
+# MAGIC through the Model Serving endpoint, which also logs requests to the inference table.
 
 # COMMAND ----------
 
-import mlflow
 from pyspark.sql import functions as F
+from pyspark.sql.functions import expr
 from datetime import datetime
 
 # COMMAND ----------
@@ -17,26 +19,13 @@ catalog = dbutils.widgets.get("catalog")
 schema = dbutils.widgets.get("schema")
 model_name = dbutils.widgets.get("model_name")
 
-uc_model_name = f"{catalog}.{schema}.{model_name}"
 feature_table = f"{catalog}.{schema}.feature_table"
 predictions_table = f"{catalog}.{schema}.predictions"
+endpoint_name = f"{schema}_{model_name}_endpoint"
 
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Load Champion Model
-
-# COMMAND ----------
-
-mlflow.set_tracking_uri("databricks")
-mlflow.set_registry_uri("databricks-uc")
-
-# Load the Champion model using alias
-model_uri = f"models:/{uc_model_name}@Champion"
-print(f"Loading model: {model_uri}")
-
-model = mlflow.sklearn.load_model(model_uri)
-print("Champion model loaded successfully!")
+print(f"Endpoint: {endpoint_name}")
+print(f"Feature table: {feature_table}")
+print(f"Predictions table: {predictions_table}")
 
 # COMMAND ----------
 
@@ -45,45 +34,39 @@ print("Champion model loaded successfully!")
 
 # COMMAND ----------
 
-# Load feature data
 features_df = spark.table(feature_table)
-print(f"Records to score: {features_df.count()}")
-
-# Convert to pandas for sklearn model
-features_pdf = features_df.toPandas()
-
-feature_columns = [
-    "trip_distance",
-    "pickup_hour",
-    "pickup_dayofweek",
-    "pickup_month",
-    "is_weekend",
-    "is_rush_hour"
-]
-
-X = features_pdf[feature_columns]
+record_count = features_df.count()
+print(f"Records to score: {record_count}")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Generate Predictions
+# MAGIC ## Generate Predictions via ai_query()
 
 # COMMAND ----------
 
-# Score data
-predictions = model.predict(X)
-features_pdf["predicted_fare"] = predictions
-features_pdf["prediction_timestamp"] = datetime.now()
-features_pdf["model_version"] = model_uri
-
-# Convert back to Spark DataFrame
-predictions_df = spark.createDataFrame(features_pdf)
-
-print(f"Generated {len(predictions)} predictions")
-print(f"Prediction stats:")
-print(f"  Mean: ${predictions.mean():.2f}")
-print(f"  Min: ${predictions.min():.2f}")
-print(f"  Max: ${predictions.max():.2f}")
+predictions_df = (
+    features_df
+    .withColumn(
+        "predicted_fare",
+        expr(f"""
+            ai_query(
+                endpoint => '{endpoint_name}',
+                request => named_struct(
+                    'trip_distance', trip_distance,
+                    'pickup_hour', pickup_hour,
+                    'pickup_dayofweek', pickup_dayofweek,
+                    'pickup_month', pickup_month,
+                    'is_weekend', is_weekend,
+                    'is_rush_hour', is_rush_hour
+                ),
+                returnType => 'FLOAT'
+            )
+        """)
+    )
+    .withColumn("prediction_timestamp", F.current_timestamp())
+    .withColumn("model_version", F.lit(endpoint_name))
+)
 
 # COMMAND ----------
 
@@ -92,7 +75,6 @@ print(f"  Max: ${predictions.max():.2f}")
 
 # COMMAND ----------
 
-# Append predictions to table (creates if not exists)
 (
     predictions_df
     .select(
@@ -105,7 +87,7 @@ print(f"  Max: ${predictions.max():.2f}")
         "fare_amount",
         "predicted_fare",
         "prediction_timestamp",
-        "model_version"
+        "model_version",
     )
     .write
     .mode("append")
@@ -122,14 +104,13 @@ print(f"Predictions written to: {predictions_table}")
 
 # COMMAND ----------
 
-# Calculate prediction error for logged predictions (where actual is available)
 error_stats = (
     predictions_df
     .withColumn("prediction_error", F.abs(F.col("predicted_fare") - F.col("fare_amount")))
     .select(
         F.mean("prediction_error").alias("mae"),
         F.stddev("prediction_error").alias("error_stddev"),
-        F.count("*").alias("record_count")
+        F.count("*").alias("record_count"),
     )
     .first()
 )
