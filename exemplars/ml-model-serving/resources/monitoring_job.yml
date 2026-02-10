@@ -1,0 +1,25 @@
+resources:
+  jobs:
+    ml_monitoring:
+      name: ml-monitoring
+      description: Monitor model drift and accuracy degradation
+      schedule:
+        quartz_cron_expression: "0 0 8 * * ?"
+        timezone_id: UTC
+        pause_status: PAUSED
+      tasks:
+        - task_key: monitor_drift
+          notebook_task:
+            notebook_path: ../src/monitoring.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+              model_name: ${var.model_name}
+          environment_key: ml_env
+
+      environments:
+        - environment_key: ml_env
+          spec:
+            client: "1"
+            dependencies:
+              - databricks-sdk>=0.68.0

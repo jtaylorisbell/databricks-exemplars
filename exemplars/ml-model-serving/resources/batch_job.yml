@@ -1,0 +1,23 @@
+resources:
+  jobs:
+    ml_batch_inference:
+      name: ml-batch-inference
+      description: Scheduled batch scoring using the Champion model
+      schedule:
+        quartz_cron_expression: "0 0 */6 * * ?"
+        timezone_id: UTC
+        pause_status: PAUSED
+      tasks:
+        - task_key: batch_predict
+          notebook_task:
+            notebook_path: ../src/batch_inference.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+              model_name: ${var.model_name}
+          environment_key: ml_env
+
+      environments:
+        - environment_key: ml_env
+          spec:
+            client: "1"

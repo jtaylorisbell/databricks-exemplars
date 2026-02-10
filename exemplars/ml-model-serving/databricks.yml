@@ -1,0 +1,22 @@
+bundle:
+  name: ml-model-serving
+
+variables:
+  catalog:
+    description: Unity Catalog name (required)
+  schema:
+    description: Schema for ML tables and models (required)
+  model_name:
+    description: Name for the registered model in Unity Catalog
+    default: fare_predictor_model
+
+include:
+  - resources/*.yml
+
+targets:
+  dev:
+    mode: development
+    default: true
+
+  prod:
+    mode: production
