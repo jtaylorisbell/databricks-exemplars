@@ -2,21 +2,25 @@
 # MAGIC %md
 # MAGIC # Model Monitoring
 # MAGIC
-# MAGIC Monitor model performance using the AI Gateway Inference Table.
-# MAGIC The inference table automatically logs all requests and responses from the
-# MAGIC serving endpoint, providing a built-in audit trail for monitoring.
+# MAGIC Monitor model performance using **Lakehouse Monitoring** on the AI Gateway Inference Table.
 # MAGIC
 # MAGIC This notebook:
-# MAGIC 1. Reads recent requests/responses from the inference table
-# MAGIC 2. Joins with the feature table to get actual fare amounts
-# MAGIC 3. Computes accuracy (MAE) and prediction distribution stats
-# MAGIC 4. Writes monitoring records for alerting and dashboards
+# MAGIC 1. Reads raw request/response payloads from the inference table
+# MAGIC 2. Unpacks JSON into a structured Delta table
+# MAGIC 3. Joins with ground truth (actual fare amounts) from the feature table
+# MAGIC 4. Creates or refreshes a Lakehouse Monitor for automated drift detection and quality tracking
 
 # COMMAND ----------
 
-from pyspark.sql import functions as F
-from pyspark.sql.types import FloatType, ArrayType, StructType, StructField, IntegerType
-from datetime import datetime, timedelta
+import json
+
+import pandas as pd
+from databricks.sdk import WorkspaceClient
+from databricks.sdk.service.catalog import (
+    MonitorInferenceLog,
+    MonitorInferenceLogProblemType,
+)
+from pyspark.sql import functions as F, types as T
 
 # COMMAND ----------
 
@@ -27,191 +31,223 @@ model_name = dbutils.widgets.get("model_name")
 
 endpoint_name = f"{schema}_{model_name}_endpoint"
 inference_table = f"{catalog}.{schema}.`{endpoint_name}_payload`"
+processed_table = f"{catalog}.{schema}.{model_name}_inference_processed"
 feature_table = f"{catalog}.{schema}.feature_table"
-monitoring_table = f"{catalog}.{schema}.model_monitoring"
 
+print(f"Endpoint: {endpoint_name}")
 print(f"Inference table: {inference_table}")
-print(f"Feature table: {feature_table}")
-print(f"Monitoring table: {monitoring_table}")
+print(f"Processed table: {processed_table}")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Load Recent Inference Requests
+# MAGIC ## Validate Endpoint
 
 # COMMAND ----------
 
-# Get inference records from the last 24 hours
-cutoff_time = datetime.now() - timedelta(hours=24)
+w = WorkspaceClient()
+endpoint = w.serving_endpoints.get(endpoint_name)
 
-raw_payloads = (
-    spark.table(inference_table)
-    .filter(F.col("request_time") >= F.lit(cutoff_time).cast("timestamp"))
-)
+served_entity = endpoint.config.served_entities[0]
+print(f"Served model: {served_entity.entity_name} v{served_entity.entity_version}")
+print(f"Endpoint state: {endpoint.state.ready}")
 
-recent_count = raw_payloads.count()
-print(f"Recent inference records (last 24h): {recent_count}")
+# COMMAND ----------
 
-if recent_count == 0:
-    print("No recent inference records to analyze. Exiting.")
+# MAGIC %md
+# MAGIC ## Define Request/Response Schema
+
+# COMMAND ----------
+
+# Schema for our fare prediction model's inputs and outputs
+request_fields = [
+    T.StructField("trip_distance", T.FloatType()),
+    T.StructField("pickup_hour", T.IntegerType()),
+    T.StructField("pickup_dayofweek", T.IntegerType()),
+    T.StructField("pickup_month", T.IntegerType()),
+    T.StructField("is_weekend", T.IntegerType()),
+    T.StructField("is_rush_hour", T.IntegerType()),
+]
+response_field = T.StructField("predicted_fare", T.FloatType())
+
+PREDICTION_COL = "predicted_fare"
+LABEL_COL = "fare_amount"
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Unpack Inference Table Payloads
+
+# COMMAND ----------
+
+# JSON consolidation UDF — normalizes multiple Model Serving request formats
+# into a common record-oriented structure for consistent downstream processing.
+def convert_to_record_json(json_str: str) -> str:
+    """Convert from any accepted JSON format into record-oriented format."""
+    try:
+        request = json.loads(json_str)
+    except json.JSONDecodeError:
+        return json_str
+
+    output = []
+    if isinstance(request, dict):
+        keys = set(request.keys())
+        if "dataframe_records" in keys:
+            output.extend(request["dataframe_records"])
+        elif "dataframe_split" in keys:
+            split = request["dataframe_split"]
+            output.extend(
+                dict(zip(split["columns"], vals)) for vals in split["data"]
+            )
+        elif "instances" in keys:
+            output.extend(request["instances"])
+        elif "inputs" in keys:
+            output.extend(request["inputs"])
+        elif "predictions" in keys:
+            output.extend({PREDICTION_COL: p} for p in request["predictions"])
+    return json.dumps(output)
+
+
+@F.pandas_udf(T.StringType())
+def consolidate_json(json_strs: pd.Series) -> pd.Series:
+    return json_strs.apply(convert_to_record_json)
+
+# COMMAND ----------
+
+# Read raw inference table and filter to successful requests
+raw_df = spark.table(inference_table).filter(F.col("status_code") == "200")
+
+record_count = raw_df.count()
+print(f"Successful inference records: {record_count}")
+
+if record_count == 0:
+    print("No inference records to process. Exiting.")
     dbutils.notebook.exit("NO_DATA")
 
 # COMMAND ----------
 
-# MAGIC %md
-# MAGIC ## Parse Requests and Responses
+# Consolidate JSON formats and parse into structured columns
+request_schema = T.ArrayType(T.StructType(request_fields))
+response_schema = T.ArrayType(T.StructType([response_field]))
 
-# COMMAND ----------
+unpacked_df = (
+    raw_df
+    .withColumn("request", consolidate_json(F.col("request")))
+    .withColumn("response", consolidate_json(F.col("response")))
+    .withColumn("request", F.from_json(F.col("request"), request_schema))
+    .withColumn("response", F.from_json(F.col("response"), response_schema))
+)
 
-# The inference table stores request/response as JSON strings.
-# For custom model serving endpoints:
-#   request:  {"dataframe_records": [{"col1": val, ...}]}
-#   response: {"predictions": [val, ...]}
-
-request_schema = "struct<dataframe_records:array<struct<trip_distance:float, pickup_hour:int, pickup_dayofweek:int, pickup_month:int, is_weekend:int, is_rush_hour:int>>>"
-response_schema = "struct<predictions:array<float>>"
-
-parsed_df = (
-    raw_payloads
-    .withColumn("req_parsed", F.from_json(F.col("request"), request_schema))
-    .withColumn("resp_parsed", F.from_json(F.col("response"), response_schema))
-    # Explode the arrays to get one row per record
+# Explode batched requests into individual rows and flatten
+exploded_df = (
+    unpacked_df
+    .withColumn("req_resp", F.arrays_zip(F.col("request"), F.col("response")))
+    .withColumn("req_resp", F.explode(F.col("req_resp")))
     .select(
-        F.posexplode(F.col("req_parsed.dataframe_records")).alias("pos", "record"),
-        F.col("resp_parsed.predictions").alias("predictions"),
-    )
-    .select(
-        F.col("record.trip_distance").alias("trip_distance"),
-        F.col("record.pickup_hour").alias("pickup_hour"),
-        F.col("record.pickup_dayofweek").alias("pickup_dayofweek"),
-        F.col("record.pickup_month").alias("pickup_month"),
-        F.col("record.is_weekend").alias("is_weekend"),
-        F.col("record.is_rush_hour").alias("is_rush_hour"),
-        F.col("predictions").getItem(F.col("pos")).alias("predicted_fare"),
+        F.col("request_time").cast(T.TimestampType()).alias("timestamp"),
+        F.col("request_time").cast("date").alias("date"),
+        F.coalesce(F.col("served_entity_id"), F.lit("unknown")).alias("model_id"),
+        F.col("req_resp.request.*"),
+        F.col("req_resp.response.*"),
+        F.expr("uuid()").alias("example_id"),
     )
 )
 
-parsed_count = parsed_df.count()
-print(f"Parsed {parsed_count} inference records")
+print(f"Exploded to {exploded_df.count()} individual predictions")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Join with Actuals
+# MAGIC ## Join with Ground Truth
 
 # COMMAND ----------
 
-# Join with feature table to get actual fare amounts for accuracy calculation
+# Join with feature table to attach actual fare amounts for quality metrics.
+# Uses a left join so predictions without matching actuals are still monitored.
 features_df = spark.table(feature_table)
 
-joined_df = (
-    parsed_df
+feature_join_cols = [
+    "trip_distance", "pickup_hour", "pickup_dayofweek",
+    "pickup_month", "is_weekend", "is_rush_hour",
+]
+
+processed_df = (
+    exploded_df
     .join(
-        features_df.select(
-            "trip_distance", "pickup_hour", "pickup_dayofweek",
-            "pickup_month", "is_weekend", "is_rush_hour", "fare_amount"
-        ),
-        on=["trip_distance", "pickup_hour", "pickup_dayofweek",
-            "pickup_month", "is_weekend", "is_rush_hour"],
-        how="inner",
+        features_df.select(*feature_join_cols, LABEL_COL),
+        on=feature_join_cols,
+        how="left",
     )
 )
 
-matched_count = joined_df.count()
-print(f"Matched with actuals: {matched_count} of {parsed_count}")
+matched = processed_df.filter(F.col(LABEL_COL).isNotNull()).count()
+total = processed_df.count()
+print(f"Matched with ground truth: {matched} / {total}")
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Calculate Monitoring Metrics
+# MAGIC ## Write Processed Table
 
 # COMMAND ----------
-
-# Prediction distribution stats (from all inference records)
-pred_stats = (
-    parsed_df
-    .agg(
-        F.mean("predicted_fare").alias("pred_mean"),
-        F.stddev("predicted_fare").alias("pred_stddev"),
-        F.count("*").alias("record_count"),
-    )
-    .first()
-)
-
-# Accuracy metrics (only where we have actuals)
-mae = None
-if matched_count > 0:
-    accuracy_stats = (
-        joined_df
-        .agg(
-            F.mean(F.abs(F.col("predicted_fare") - F.col("fare_amount"))).alias("mae"),
-        )
-        .first()
-    )
-    mae = float(accuracy_stats.mae)
-
-print(f"\nPrediction Distribution:")
-print(f"  Mean: ${pred_stats.pred_mean:.2f}")
-print(f"  Stddev: ${pred_stats.pred_stddev:.2f}")
-print(f"  Count: {pred_stats.record_count}")
-if mae is not None:
-    print(f"  MAE vs actuals: ${mae:.2f}")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Determine Alerts
-
-# COMMAND ----------
-
-MAE_THRESHOLD = 5.0
-
-alerts = []
-
-if mae is not None and mae > MAE_THRESHOLD:
-    alerts.append(f"ACCURACY_DEGRADATION: MAE ${mae:.2f} exceeds threshold ${MAE_THRESHOLD}")
-
-should_retrain = len(alerts) > 0
-
-if should_retrain:
-    print("\nALERTS TRIGGERED:")
-    for alert in alerts:
-        print(f"  - {alert}")
-    print("\n  Recommendation: Consider retraining the model")
-else:
-    print("\nNo alerts. Model performing within acceptable bounds.")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Write Monitoring Metrics
-
-# COMMAND ----------
-
-monitoring_schema = "timestamp timestamp, model_name string, endpoint_name string, record_count int, prediction_mean double, prediction_stddev double, mae double, mae_threshold double, alerts string, should_retrain boolean"
-
-monitoring_record = spark.createDataFrame([{
-    "timestamp": datetime.now(),
-    "model_name": f"{catalog}.{schema}.{model_name}",
-    "endpoint_name": endpoint_name,
-    "record_count": int(pred_stats.record_count),
-    "prediction_mean": float(pred_stats.pred_mean),
-    "prediction_stddev": float(pred_stats.pred_stddev),
-    "mae": mae,
-    "mae_threshold": MAE_THRESHOLD,
-    "alerts": ",".join(alerts) if alerts else None,
-    "should_retrain": should_retrain,
-}], schema=monitoring_schema)
 
 (
-    monitoring_record
+    processed_df
     .write
-    .mode("append")
-    .option("mergeSchema", "true")
-    .saveAsTable(monitoring_table)
+    .mode("overwrite")
+    .option("overwriteSchema", "true")
+    .saveAsTable(processed_table)
 )
 
-print(f"\nMonitoring metrics written to: {monitoring_table}")
+# Enable Change Data Feed — required by Lakehouse Monitoring
+spark.sql(
+    f"ALTER TABLE {processed_table} "
+    f"SET TBLPROPERTIES (delta.enableChangeDataFeed = true)"
+)
+
+print(f"Processed table written: {processed_table}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Create or Refresh Lakehouse Monitor
+# MAGIC
+# MAGIC Lakehouse Monitoring automatically tracks:
+# MAGIC - **Data drift**: detects shifts in input feature distributions
+# MAGIC - **Model quality**: regression metrics (MAE, RMSE, R2) when ground truth is available
+# MAGIC - **Statistical profiles**: summary statistics over configurable time windows
+# MAGIC
+# MAGIC Results are available in the **Quality** tab of the table in Catalog Explorer.
+
+# COMMAND ----------
+
+monitor_exists = False
+try:
+    w.quality_monitors.get(table_name=processed_table)
+    monitor_exists = True
+    print(f"Monitor already exists for {processed_table}")
+except Exception:
+    print(f"Creating new monitor for {processed_table}")
+
+# COMMAND ----------
+
+if monitor_exists:
+    w.quality_monitors.run_refresh(table_name=processed_table)
+    print("Monitor refresh triggered")
+else:
+    w.quality_monitors.create(
+        table_name=processed_table,
+        assets_dir=f"/Shared/lakehouse_monitoring/{endpoint_name}",
+        inference_log=MonitorInferenceLog(
+            problem_type=MonitorInferenceLogProblemType.PROBLEM_TYPE_REGRESSION,
+            prediction_col=PREDICTION_COL,
+            label_col=LABEL_COL,
+            timestamp_col="timestamp",
+            model_id_col="model_id",
+            granularities=["1 day"],
+        ),
+    )
+    print(f"Monitor created for {processed_table}")
 
 # COMMAND ----------
 
@@ -223,13 +259,9 @@ print(f"\nMonitoring metrics written to: {monitoring_table}")
 print("\n" + "=" * 50)
 print("MONITORING SUMMARY")
 print("=" * 50)
-print(f"Period: Last 24 hours")
-print(f"Inference records: {pred_stats.record_count}")
-print(f"Prediction mean: ${pred_stats.pred_mean:.2f}")
-print(f"Prediction stddev: ${pred_stats.pred_stddev:.2f}")
-if mae is not None:
-    print(f"MAE: ${mae:.2f} (threshold: ${MAE_THRESHOLD})")
-else:
-    print(f"MAE: N/A (no matched actuals)")
-print(f"Retrain recommended: {should_retrain}")
+print(f"Inference records processed: {total}")
+print(f"Ground truth matched: {matched}")
+print(f"Processed table: {processed_table}")
+print(f"Monitor status: {'refreshed' if monitor_exists else 'created'}")
+print(f"\nView dashboards: Catalog Explorer → {processed_table} → Quality tab")
 print("=" * 50)

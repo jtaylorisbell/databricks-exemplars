@@ -59,23 +59,6 @@ print("Model approved for deployment!")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Promote to Champion
-
-# COMMAND ----------
-
-mlflow_client = MlflowClient()
-
-# Set Champion alias on the new version
-mlflow_client.set_registered_model_alias(
-    name=uc_model_name,
-    alias="Champion",
-    version=model_version
-)
-print(f"Promoted version {model_version} to 'Champion'")
-
-# COMMAND ----------
-
-# MAGIC %md
 # MAGIC ## Create or Update Serving Endpoint
 
 # COMMAND ----------
@@ -190,4 +173,23 @@ response = w.serving_endpoints.query(
 )
 
 print(f"\nTest prediction: ${response.predictions[0]:.2f}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Promote to Champion
+# MAGIC
+# MAGIC Champion alias is set **after** the endpoint is verified healthy.
+# MAGIC This prevents inconsistent state if endpoint creation fails.
+
+# COMMAND ----------
+
+mlflow_client = MlflowClient()
+
+mlflow_client.set_registered_model_alias(
+    name=uc_model_name,
+    alias="Champion",
+    version=model_version
+)
+print(f"Promoted version {model_version} to 'Champion'")
 print(f"\nDeployment complete!")

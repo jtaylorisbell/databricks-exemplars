@@ -90,8 +90,8 @@ predictions_df = (
         "model_version",
     )
     .write
-    .mode("append")
-    .option("mergeSchema", "true")
+    .mode("overwrite")
+    .option("overwriteSchema", "true")
     .saveAsTable(predictions_table)
 )
 
