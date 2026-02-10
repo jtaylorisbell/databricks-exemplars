@@ -1,6 +1,6 @@
 # ML Model Serving
 
-An end-to-end machine learning workflow demonstrating MLflow experiment tracking, Unity Catalog model registry, real-time model serving, and automated monitoring with Lakehouse Monitoring.
+An end-to-end machine learning workflow demonstrating MLflow experiment tracking, Unity Catalog model registry, real-time model serving, and automated monitoring with Data Quality Monitoring.
 
 ## Use Case
 
@@ -30,7 +30,7 @@ Training Pipeline (on-demand)
                │                               │
                ▼                               ▼
         Predictions Table            Monitoring (daily)
-        (convenience layer)          Lakehouse Monitoring
+        (convenience layer)          Data Quality Monitoring
                                      (drift + quality)
 ```
 
@@ -44,16 +44,16 @@ The serving endpoint is **not** defined as a DAB resource. Instead, `deploy.py` 
 
 Batch inference uses `ai_query()` to route predictions through the serving endpoint rather than loading the model onto the driver. This means every prediction — batch or real-time — flows through the same endpoint and is automatically logged to the AI Gateway inference table.
 
-### Lakehouse Monitoring
+### Data Quality Monitoring
 
-Instead of custom drift detection code, this exemplar uses Databricks Lakehouse Monitoring which automatically tracks:
+Instead of custom drift detection code, this exemplar uses Databricks Data Quality Monitoring which automatically tracks:
 
 - **Inference volume** over time
 - **Model quality** metrics (MAE, RMSE, MSE, MAPE, R2)
 - **Prediction drift** detection
 - **Feature drift** across all input columns
 
-The monitoring job unpacks inference table payloads into a structured Delta table, joins with ground truth, and creates a Lakehouse Monitor that generates dashboards automatically.
+The monitoring job unpacks inference table payloads into a structured Delta table, joins with ground truth, and creates a Data Quality Monitor that generates dashboards automatically.
 
 After running the monitoring job, the auto-generated dashboard (accessible via **Catalog Explorer > your table > Quality tab**) shows:
 - **Inference volume** over time (e.g., 48K inferences in the last window)
@@ -80,7 +80,7 @@ All jobs use serverless compute. No cluster configurations needed.
 |-----|----------|-------------|
 | `ml_training_pipeline` | On-demand | Train → Validate → Deploy (multi-task) |
 | `ml_batch_inference` | Every 6 hours (paused) | Score feature table via `ai_query()` |
-| `ml_monitoring` | Daily at 8 AM UTC (paused) | Unpack inference table, refresh Lakehouse Monitor |
+| `ml_monitoring` | Daily at 8 AM UTC (paused) | Unpack inference table, refresh Data Quality Monitor |
 
 ### Tables
 
@@ -88,7 +88,7 @@ All jobs use serverless compute. No cluster configurations needed.
 |-------|-----------|---------|
 | `feature_table` | train.py | Features for training and batch inference |
 | `predictions` | batch_inference.py | Structured predictions (convenience layer — raw data also in inference table) |
-| `{model_name}_inference_processed` | monitoring.py | Unpacked inference records with ground truth, monitored by Lakehouse Monitoring |
+| `{model_name}_inference_processed` | monitoring.py | Unpacked inference records with ground truth, monitored by Data Quality Monitoring |
 | `{endpoint}_payload` | AI Gateway | Auto-logged raw request/response payloads |
 
 ### Serving Endpoint
@@ -174,7 +174,7 @@ See [SETUP.md](SETUP.md) for detailed setup instructions, authentication options
 2. Unpacks JSON request/response using a consolidation UDF that handles all Model Serving formats
 3. Joins with the feature table to attach ground truth (actual fare amounts)
 4. Writes to a processed Delta table with Change Data Feed enabled
-5. Creates or refreshes a Lakehouse Monitor configured for regression
+5. Creates or refreshes a Data Quality Monitor configured for regression
 
 ## Testing
 
@@ -205,7 +205,7 @@ ml-model-serving/
 │   ├── validate.py             # Model validation notebook
 │   ├── deploy.py               # Endpoint deployment notebook
 │   ├── batch_inference.py      # Batch scoring via ai_query()
-│   ├── monitoring.py           # Inference table unpacking + Lakehouse Monitor
+│   ├── monitoring.py           # Inference table unpacking + Data Quality Monitor
 │   └── features.py             # Shared feature constants and helpers
 └── tests/
     └── test_features.py        # Unit tests for feature logic
@@ -215,7 +215,7 @@ ml-model-serving/
 
 - [Model Serving](https://docs.databricks.com/en/machine-learning/model-serving/index.html)
 - [AI Gateway Inference Tables](https://docs.databricks.com/en/machine-learning/model-serving/inference-tables.html)
-- [Lakehouse Monitoring](https://docs.databricks.com/en/lakehouse-monitoring/index.html)
+- [Data Quality Monitoring](https://docs.databricks.com/en/lakehouse-monitoring/index.html)
 - [ai_query() Function](https://docs.databricks.com/en/sql/language-manual/functions/ai_query.html)
 - [MLflow on Databricks](https://docs.databricks.com/en/mlflow/index.html)
 - [Unity Catalog Model Registry](https://docs.databricks.com/en/mlflow/model-registry.html)
