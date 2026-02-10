@@ -16,9 +16,13 @@ import json
 
 import pandas as pd
 from databricks.sdk import WorkspaceClient
-from databricks.sdk.service.catalog import (
-    MonitorInferenceLog,
-    MonitorInferenceLogProblemType,
+from databricks.sdk.service.dataquality import (
+    AggregationGranularity,
+    DataProfilingConfig,
+    InferenceLogConfig,
+    InferenceProblemType,
+    Monitor,
+    Refresh,
 )
 from pyspark.sql import functions as F, types as T
 
@@ -221,9 +225,21 @@ print(f"Processed table written: {processed_table}")
 
 # COMMAND ----------
 
+# Look up table and schema IDs required by the data quality API
+table_info = w.tables.get(full_name=processed_table)
+schema_info = w.schemas.get(full_name=f"{catalog}.{schema}")
+
+table_id = table_info.table_id
+output_schema_id = schema_info.schema_id
+
+print(f"Table ID: {table_id}")
+print(f"Output schema ID: {output_schema_id}")
+
+# COMMAND ----------
+
 monitor_exists = False
 try:
-    w.quality_monitors.get(table_name=processed_table)
+    w.data_quality.get_monitor(object_type="table", object_id=table_id)
     monitor_exists = True
     print(f"Monitor already exists for {processed_table}")
 except Exception:
@@ -232,19 +248,29 @@ except Exception:
 # COMMAND ----------
 
 if monitor_exists:
-    w.quality_monitors.run_refresh(table_name=processed_table)
+    w.data_quality.create_refresh(
+        object_type="table",
+        object_id=table_id,
+        refresh=Refresh(object_type="table", object_id=table_id),
+    )
     print("Monitor refresh triggered")
 else:
-    w.quality_monitors.create(
-        table_name=processed_table,
-        assets_dir=f"/Shared/lakehouse_monitoring/{endpoint_name}",
-        inference_log=MonitorInferenceLog(
-            problem_type=MonitorInferenceLogProblemType.PROBLEM_TYPE_REGRESSION,
-            prediction_col=PREDICTION_COL,
-            label_col=LABEL_COL,
-            timestamp_col="timestamp",
-            model_id_col="model_id",
-            granularities=["1 day"],
+    w.data_quality.create_monitor(
+        monitor=Monitor(
+            object_type="table",
+            object_id=table_id,
+            data_profiling_config=DataProfilingConfig(
+                output_schema_id=output_schema_id,
+                assets_dir=f"/Shared/lakehouse_monitoring/{endpoint_name}",
+                inference_log=InferenceLogConfig(
+                    problem_type=InferenceProblemType.INFERENCE_PROBLEM_TYPE_REGRESSION,
+                    prediction_column=PREDICTION_COL,
+                    label_column=LABEL_COL,
+                    timestamp_column="timestamp",
+                    model_id_column="model_id",
+                    granularities=[AggregationGranularity.AGGREGATION_GRANULARITY_1_DAY],
+                ),
+            ),
         ),
     )
     print(f"Monitor created for {processed_table}")

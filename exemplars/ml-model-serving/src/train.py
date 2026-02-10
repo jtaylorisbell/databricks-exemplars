@@ -68,7 +68,7 @@ print(f"Total records after filtering: {features_df.count()}")
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Save Feature Table and Training Baseline
+# MAGIC ## Save Feature Table
 
 # COMMAND ----------
 
@@ -77,15 +77,6 @@ feature_table_name = f"{catalog}.{schema}.feature_table"
 features_df.write.mode("overwrite").saveAsTable(feature_table_name)
 print(f"Feature table saved: {feature_table_name}")
 
-# Save training baseline for drift monitoring
-baseline_table_name = f"{catalog}.{schema}.training_baseline"
-(
-    features_df
-    .select("trip_distance", "pickup_hour", "pickup_dayofweek", "fare_amount")
-    .summary("count", "mean", "stddev", "min", "25%", "50%", "75%", "max")
-    .write.mode("overwrite").saveAsTable(baseline_table_name)
-)
-print(f"Training baseline saved: {baseline_table_name}")
 
 # COMMAND ----------
 

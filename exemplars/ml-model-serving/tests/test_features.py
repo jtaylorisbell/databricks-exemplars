@@ -1,5 +1,9 @@
 """Unit tests for fare prediction feature engineering.
 
+Tests import business rules from src/features.py — the single source of truth
+for feature constants and transformation logic. This ensures tests stay in sync
+with the rules used by the PySpark implementation in train.py.
+
 Run with: uv run pytest tests/
 """
 
@@ -8,6 +12,17 @@ import pandas as pd
 import numpy as np
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.metrics import mean_absolute_error
+
+from features import (
+    FEATURE_COLUMNS,
+    TARGET_COLUMN,
+    FARE_MIN,
+    FARE_MAX,
+    WEEKEND_DAYS,
+    is_weekend,
+    is_rush_hour,
+    is_valid_fare,
+)
 
 
 class TestFeatureTransformations:
@@ -18,7 +33,7 @@ class TestFeatureTransformations:
         dayofweek_values = [1, 2, 3, 4, 5, 6, 7]  # Sun=1, Sat=7
         expected = [1, 0, 0, 0, 0, 0, 1]
 
-        results = [1 if d in [1, 7] else 0 for d in dayofweek_values]
+        results = [is_weekend(d) for d in dayofweek_values]
 
         assert results == expected
 
@@ -26,9 +41,6 @@ class TestFeatureTransformations:
         """Rush hour should be flagged for 7-9 AM and 4-7 PM."""
         hours = [6, 7, 8, 9, 10, 15, 16, 17, 18, 19, 20]
         expected = [0, 1, 1, 1, 0, 0, 1, 1, 1, 1, 0]
-
-        def is_rush_hour(h):
-            return 1 if (7 <= h <= 9) or (16 <= h <= 19) else 0
 
         results = [is_rush_hour(h) for h in hours]
 
@@ -38,14 +50,30 @@ class TestFeatureTransformations:
         """Fares outside valid range should be filtered."""
         fares = [5.0, 50.0, 150.0, 250.0, -5.0, 0.0]
 
-        # Valid fares: > 0 and < 200
-        valid_fares = [f for f in fares if 0 < f < 200]
+        valid_fares = [f for f in fares if is_valid_fare(f)]
 
         assert valid_fares == [5.0, 50.0, 150.0]
+
+    def test_fare_thresholds(self):
+        """Fare thresholds should match expected bounds."""
+        assert FARE_MIN == 0
+        assert FARE_MAX == 200
+
+    def test_weekend_days(self):
+        """Weekend days should be Sunday (1) and Saturday (7)."""
+        assert WEEKEND_DAYS == {1, 7}
 
 
 class TestFeatureValidation:
     """Tests for feature data validation."""
+
+    def test_feature_columns_complete(self):
+        """All expected feature columns should be defined."""
+        expected = {
+            "trip_distance", "pickup_hour", "pickup_dayofweek",
+            "pickup_month", "is_weekend", "is_rush_hour",
+        }
+        assert set(FEATURE_COLUMNS) == expected
 
     def test_feature_dtypes(self):
         """Features should have expected numeric types."""
@@ -80,14 +108,8 @@ class TestModelPredictions:
 
     def test_model_trains_without_error(self):
         """Model should train without errors on sample data."""
-        X = pd.DataFrame({
-            "trip_distance": [1.0, 2.0, 5.0, 10.0, 15.0],
-            "pickup_hour": [8, 12, 17, 22, 6],
-            "pickup_dayofweek": [2, 3, 4, 5, 7],
-            "pickup_month": [1, 3, 6, 9, 12],
-            "is_weekend": [0, 0, 0, 0, 1],
-            "is_rush_hour": [1, 0, 1, 0, 0],
-        })
+        X = pd.DataFrame({col: [1.0, 2.0, 5.0, 10.0, 15.0] for col in FEATURE_COLUMNS})
+        X["trip_distance"] = [1.0, 2.0, 5.0, 10.0, 15.0]
         y = [10.0, 15.0, 25.0, 40.0, 55.0]
 
         model = GradientBoostingRegressor(n_estimators=10, random_state=42)

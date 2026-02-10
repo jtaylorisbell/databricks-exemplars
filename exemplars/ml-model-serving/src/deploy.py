@@ -69,7 +69,7 @@ w = WorkspaceClient()
 served_entity = ServedEntityInput(
     entity_name=uc_model_name,
     entity_version=str(model_version),
-    workload_size="Small",
+    workload_size="Medium",
     scale_to_zero_enabled=True,
 )
 
@@ -139,6 +139,7 @@ else:
         name=endpoint_name,
         config=endpoint_config,
         ai_gateway=ai_gateway_config,
+        route_optimized=True,
     )
 
 print(f"Endpoint ready: {endpoint_name}")

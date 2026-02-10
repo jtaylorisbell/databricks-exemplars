@@ -8,9 +8,9 @@
 
 # COMMAND ----------
 
+from databricks.sdk import WorkspaceClient
 from pyspark.sql import functions as F
 from pyspark.sql.functions import expr
-from datetime import datetime
 
 # COMMAND ----------
 
@@ -26,6 +26,18 @@ endpoint_name = f"{schema}_{model_name}_endpoint"
 print(f"Endpoint: {endpoint_name}")
 print(f"Feature table: {feature_table}")
 print(f"Predictions table: {predictions_table}")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Get Current Model Version
+
+# COMMAND ----------
+
+w = WorkspaceClient()
+endpoint = w.serving_endpoints.get(endpoint_name)
+current_model_version = endpoint.config.served_entities[0].entity_version
+print(f"Serving model version: {current_model_version}")
 
 # COMMAND ----------
 
@@ -65,13 +77,17 @@ predictions_df = (
         """)
     )
     .withColumn("prediction_timestamp", F.current_timestamp())
-    .withColumn("model_version", F.lit(endpoint_name))
+    .withColumn("model_version", F.lit(current_model_version))
 )
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ## Write Predictions
+# MAGIC
+# MAGIC This predictions table is a convenience layer for downstream consumers.
+# MAGIC The raw request/response data is also logged automatically to the AI Gateway
+# MAGIC inference table, which the monitoring job uses for drift detection and quality tracking.
 
 # COMMAND ----------
 
@@ -96,26 +112,5 @@ predictions_df = (
 )
 
 print(f"Predictions written to: {predictions_table}")
-
-# COMMAND ----------
-
-# MAGIC %md
-# MAGIC ## Log Inference Metrics
-
-# COMMAND ----------
-
-error_stats = (
-    predictions_df
-    .withColumn("prediction_error", F.abs(F.col("predicted_fare") - F.col("fare_amount")))
-    .select(
-        F.mean("prediction_error").alias("mae"),
-        F.stddev("prediction_error").alias("error_stddev"),
-        F.count("*").alias("record_count"),
-    )
-    .first()
-)
-
-print(f"\nInference batch metrics:")
-print(f"  Records scored: {error_stats.record_count}")
-print(f"  MAE vs actual: ${error_stats.mae:.2f}")
-print(f"  Error stddev: ${error_stats.error_stddev:.2f}")
+print(f"Records scored: {record_count}")
+print(f"Model version: {current_model_version}")
