@@ -1,4 +1,4 @@
-# ML Model Serving
+# End-to-End Machine Learning Workflow
 
 An end-to-end machine learning workflow demonstrating MLflow experiment tracking, Unity Catalog model registry, real-time model serving, and automated monitoring with Data Quality Monitoring.
 
